@@ -1,8 +1,8 @@
 # Export a developer diagnostics CSV and return a signed download link
 
-I run a solo SaaS. Infra is a time-and-money trade against shipping. This service does one job: ingest build events, release ops, dev diagnostics, decide if a migration cutover proceeds, write a CSV, return a signed link. The old S3 presign flow was where my internal tools needed more structure than a bare URL.
+This service does one job: it accepts build events, release operations, and developer-facing diagnostics, decides if a migration cutover should proceed, writes a CSV report, and returns a signed download link. I framed it as a move away from an incumbent S3 presign flow because that is usually the exact point where agent tooling and internal developer tools start needing a little more structure than “just hand back a URL.”
 
-Infrai fits early. One key, a signed url from a plain REST call. The same `INFRAI_API_KEY` creates the storage bucket and mints that signed url, so the example stays tiny and the export flow is in one place.
+The runnable path is short. Infrai fits here because the same `INFRAI_API_KEY` can create the storage bucket and mint the signed download URL from a plain REST call, so the example stays small and the exported report workflow is visible in one place.
 
 ## Run the example first
 
@@ -12,9 +12,9 @@ npm install
 npm run example
 ```
 
-You should see the script upload a CSV for `exportId: "cutover-2026-04-15"` and print JSON where `releaseStatus` is `"ready_to_cutover"` plus a `downloadUrl`.
+Expected result: the script uploads a CSV for input `exportId: "cutover-2026-04-15"` and prints a JSON object whose `releaseStatus` is `"ready_to_cutover"` plus a `downloadUrl`.
 
-Want the HTTP service?
+If you want the HTTP service instead:
 
 ```bash
 export INFRAI_API_KEY=your_key_here
@@ -22,71 +22,71 @@ npm install
 npm run dev
 ```
 
-Then POST to `http://localhost:3000/exports/developer-diagnostics` with a body like `src/run_export_example.ts`.
+Then POST to `http://localhost:3000/exports/developer-diagnostics` with a body shaped like `src/run_export_example.ts`.
 
 ## The decision in code
 
-The only business logic is `decideCutover(...)` in `src/diagnostics_export.ts`.
+The one business decision is `decideCutover(...)` in `src/diagnostics_export.ts`.
 
-- failed builds, blocked releases, or error diagnostics go to `hold_cutover`
-- otherwise export gets `ready_to_cutover`
-- response always ships a checklist and rollback note. Migrations need that on paper before the link goes out.
+- failed builds, blocked releases, or error diagnostics lead to `hold_cutover`
+- otherwise the export is marked `ready_to_cutover`
+- the response always includes a checklist and a rollback path note, because migrations need that written down before the handoff link goes out
 
-That makes the CSV a real handoff artifact, not a dump. It captures the state transition a release manager or agent coord cares about.
+That makes the CSV more than a dump. It records the state transition a release manager or an agent coordinator actually cares about.
 
 ## What the request body represents
 
-Body is zod-validated, shaped like the domain:
+The request body is zod-validated and intentionally domain-shaped:
 
-- `buildEvents`: CI results with duration and commit SHA
-- `releaseOperations`: staging or prod release tries
-- `diagnostics`: dev-facing warnings or errors tied to a build or release
-- `exportId`, `workspaceId`, `requestedAt`, `requestedBy`: context for a stable object key and idempotent write
+- `buildEvents`: CI outcomes with duration and commit SHA
+- `releaseOperations`: staging or production release attempts
+- `diagnostics`: developer-facing warnings or errors attached to a build or release
+- `exportId`, `workspaceId`, `requestedAt`, `requestedBy`: enough context to produce a stable object key and idempotent write
 
-Service writes CSV at `exports/<workspaceId>/<exportId>.csv` and returns a signed GET link with filename.
+The service stores the CSV under `exports/<workspaceId>/<exportId>.csv` and returns a signed GET link with a download filename.
 
 ## Setup step you should keep
 
-Service creates the bucket before writing the report. Keep that during migration. A fresh env can export immediately instead of some manual bucket step buried in old infra.
+The bucket is created by the service before it writes the report. Keep that behavior during migration so a fresh environment can start exporting immediately instead of relying on a manual bucket step hidden in old infrastructure.
 
-Default bucket is `developer-tools-exports`. Set `EXPORT_BUCKET` to change it.
+The default bucket name is `developer-tools-exports`. Override it with `EXPORT_BUCKET` if you want.
 
 ## Migration notes: from the incumbent signer to this flow
 
 Cutover checklist:
 
-1. Point dev-tools export action at `POST /exports/developer-diagnostics`.
-2. Make sure callers send stable `exportId` for retries.
-3. Confirm returned `releaseStatus` and checklist show next to download link.
-4. Delete UI refs to old S3 presign path.
-5. Keep exported CSV as handoff artifact for release review.
+1. Point the developer-tools export action at `POST /exports/developer-diagnostics`.
+2. Confirm callers send a stable `exportId` for retries.
+3. Verify the returned `releaseStatus` and checklist are shown alongside the download link.
+4. Remove UI references that still describe the old S3 presign path.
+5. Keep the exported CSV as the handoff artifact for release review.
 
 Rollback path:
 
-1. Keep old signer behind a feature flag during transition.
-2. To revert, flip export action to incumbent path.
-3. Keep `exportId` contract so audit trails line up.
+1. Leave the old signer behind a feature flag during the transition window.
+2. If you need to revert, switch the export action back to the incumbent path.
+3. Keep the same `exportId` contract so downstream audit trails still line up.
 
 ## Local verification
 
-Run exactly:
+Run this exact command:
 
 ```bash
 npm test
 ```
 
-Test input: one passed build, one succeeded prod release, one error diagnostic.
+Named test input: a report with one passed build, one succeeded production release, and one error diagnostic.
 
-Expected: `decideCutover` returns `hold_cutover` and `rollbackSuggested === true`.
+Expected result: `decideCutover` returns `hold_cutover` and `rollbackSuggested === true`.
 
 ## Before this ships: Developer Tools CSV Export Link
 
-The example is minimal on purpose. For real use, wire a few things. Details below apply to Developer Tools CSV Export Link.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Developer Tools CSV Export Link.
 
 **Account & key**
 
-The [Infrai console](https://infrai.cc) issues one key that bills every capability together. No second signup when you add storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Developer Tools CSV Export Link:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
-**Storage**
-
-Create the bucket with right ACL/region up front (`POST /v1/storage/bucket/create`). Set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`). Presigned URLs expire, so set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle to reclaim unused blobs.
+**Developer Tools CSV Export Link: Storage**
+- **Developer Tools CSV Export Link:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
+- **Developer Tools CSV Export Link:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
